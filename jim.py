@@ -14,7 +14,15 @@ sha256_hash = hashlib.sha256(data).hexdigest()
 rng = get_generator_from_hash(sha256_hash)
 
 ints = [rng.randint(100, 64000) for _ in range(5)]
-print("Sekvens 1:", ints)
+print("Valg 1:", ints[2])
 
 rng_replay = get_generator_from_hash(sha256_hash)
-print("Sekvens 2:", [rng_replay.randint(100, 64000) for _ in range(5)])
+
+i = 0
+
+ints2 = [rng_replay.randint(100, 64000) for _ in range(5)]
+
+while ints2[i] != ints[2]:
+    i = i + 1 
+    print(i)
+

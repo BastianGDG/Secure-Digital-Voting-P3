@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+
+<body>
+<form action="" method="post">
+
+{% for party, members in parties.items() %}
+
+    <h2>{{ party }}</h2>
+            <input type="radio"
+        name="party"
+        value="{{ party }}">
+    <label>{{party}}</label>
+
+    {% for member in members %}
+
+        <input type="radio"
+        name="candidate"
+        value="{{ member }}">
+
+        <label>{{member}}</label>
+
+    {% endfor %}
+
+{% endfor %}
+   <button type="submit" formaction="/vote">
+        Submit Vote
+    </button>
+</form>
+</body>
+
+</html>
