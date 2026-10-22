@@ -1,0 +1,21 @@
+## LAV FOLK
+import random
+import sqlite3
+
+conn = sqlite3.connect("voting.db")
+cursor = conn.cursor()
+
+
+
+voter = ["FirstName", "LastName", "PseudoCPR", "VoterID"]
+
+## LAV FUNKTION, SOM GENERERER LISTER OVER VOTERS
+
+## LAV ET INPUT-FELT, SOM MODTAGER, HVOR MANGE VOTERS, DER SKAL GENERERES
+
+## LAV ET LOOP, SOM GENERERER DE FORSKELLIGE VÆRDIER FOR EN LISTE (VOTER)
+
+## REPEAT LOOP DET ANTAL GANGE, SOM DER ER REQUESTED VOTERS
+
+## RETURNÉR ALLE LISTER TIL DATABASEN
+
