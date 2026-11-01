@@ -28,6 +28,20 @@ for n in range(len(temp)):
 print(parties)
 
 @app.get("/")
+def index():
+
+    return render_template(
+        "index.html",
+    )
+
+@app.get("/login")
+def loginscreen():
+
+    return render_template(
+        "Login.html",
+    )
+
+@app.get("/candidates")
 def test():
 
     return render_template(
@@ -35,6 +49,22 @@ def test():
         parties=parties
     )
 
+@app.post("/login")
+def login():
+    cpr = request.form["CPR"]
+    print(f"cpr: {cpr}")
+    passwrd = request.form["Password"]
+    print(f"password: {passwrd}")
+    if cpr == "12345" and passwrd == "login":
+        return render_template(
+                "test.html",
+                parties=parties
+            )
+    else:
+        return render_template(
+                "invalid.html",
+            )
+    
 
 @app.post("/vote")
 def vote():
@@ -42,12 +72,20 @@ def vote():
         candidate = request.form["candidate"]
         print(f"Vote received for {candidate}")
         app.logger.debug('A value for debugging')
-        return {"status": "success", "candidate": candidate}
+        return render_template(
+                "confirmation.html",
+                vote=candidate
+            )
+        #return {"status": "success", "candidate": candidate}
     except:
         party = request.form["party"]
         print(f"Vote received for {party}")
         app.logger.debug('A value for debugging')
-        return {"status": "success", "party": party}
+        return render_template(
+                "confirmation.html",
+                vote=party
+            )
+        #return {"status": "success", "party": party}
 
 app.run(
     host="0.0.0.0",
