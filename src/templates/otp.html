@@ -1,0 +1,18 @@
+<!-- index.html -->
+<html>
+  <body>
+    <canvas id="canvas"></canvas>
+
+    <script type="module">
+      import QRCode from 'https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm';
+
+      const canvas = document.getElementById('canvas');
+      let otp = "{{ onetimepass }}";
+
+      QRCode.toCanvas(canvas, otp, (err) => {
+          if (err) console.error(err);
+      });
+
+    </script>
+  </body>
+</html>
