@@ -31,6 +31,8 @@ def makePeople():
     eligible = int(eligible)
     password = input("Password: ")
     password = hashBcr(password,None)
+    password = password.decode()
+    
     hasRegistered = input("Has registered?: ")
     hasRegistered = int(hasRegistered)
     otp = pyotp.random_base32()
