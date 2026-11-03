@@ -100,7 +100,7 @@ def handle_method():
                 registered = cursor.fetchone()[0]
 
                 if(registered == True):
-                    response = make_response(redirect("/vote"))
+                    response = make_response(redirect("/voting"))
                 else:
                     response = make_response(redirect("/register"))
 
@@ -117,8 +117,11 @@ def handle_method():
 
 @app.get("/voting")
 def get_voting_sheet():
-        return render_template(
-        "voting.html"
+    parties = getCandidates()
+
+    return render_template(
+        "voting.html",
+        parties = parties
         )
 
 @app.post("/submit_vote")
@@ -129,49 +132,31 @@ def submit_vote():
         try:
             candidate = request.form["candidate"]
             cursor.execute("""SELECT Candidate_id FROM Candidates WHERE Candidate_name = ?""", (candidate,))
-            candidate = cursor.fetchone
-
+            candidate = cursor.fetchone()
+            vote = candidate[0] # for at sikre os det er en kandidat
+            
+            cursor.execute(
+            "INSERT INTO votes (candidate_id,party_id) VALUES (?,(SELECT party_id FROM Candidates WHERE Candidate_id = ?))",
+            (vote,vote,)
+            )   
+        except:
             party = request.form["party"]
             cursor.execute("""SELECT Party_id FROM Parties WHERE Party_name = ?""", (party,))
             party = cursor.fetchone() # fetchone() kalder funktionen og henter resultatet fra SQL.
-
-            if candidate and party is None:
-                return{"status": "error"} # her ser vi lige om de har gemt
-            
-            if party is None:
-                candidate_id = candidate[0] # for at sikre os det er en kandidat
-                cursor.execute(
-                "INSERT INTO votes (candidate_id) VALUES (?)",
-                (candidate_id,)
+            vote = party[0]
+            cursor.execute(
+            "INSERT INTO votes (party_id) VALUES (?)",
+                (vote,)
                 )
-
-            elif candidate is None:
-                party_id = party[0]
-                cursor.execute(
-                "INSERT INTO votes (party_id) VALUES (?)",
-                    (party_id,)
-                    )
-
-            conn.commit()
-            return {"status": "success"}
-        except:
-            return {"status": "critical error" "vote was not recorded"}
-
-        
         finally:
             conn.commit()
-            conn.close()
-
-
-
-@app.post("/receipt")
-def receipt():
-    try:
-        candidate = request.form["candidate"]
-        party = request.form["party"]
-    
-    except:
-        return {"Status": "Internal server error", "Error": "500"}
+            if vote is None:
+                return{"status": "error"} # her ser vi lige om de har gemt
+            else:
+                return render_template(
+                "confirmation.html",
+                    vote = vote
+                    )
 
 @app.get("/register")
 
