@@ -36,6 +36,7 @@ def getCandidates():
     return parties
 
 def updateToken(result,response):
+
     with sqlite3.connect("voting.db") as conn:
         cursor = conn.cursor()
     token = secrets.token_urlsafe(32)
@@ -54,15 +55,48 @@ def updateToken(result,response):
     
     return response
 
+def register():
+    token = request.cookies.get("session_token")
+
+    print(f"Token: {token}")
+
+    with sqlite3.connect("voting.db") as conn:
+        cursor = conn.cursor()
+
+    cursor.execute("""SELECT Voter_ID FROM Session_view WHERE session_token = ? LIMIT 1;""",(token,))
+    voterId = cursor.fetchone()
+    
+    if token is None or voterId is None:
+        return redirect("/login")
+
+    VoterId = VoterId[0]
+
+    cursor.execute("""SELECT First_name, Last_name FROM Voters WHERE Voter_ID = ? LIMIT 1""",(VoterId,))
+    first_name = cursor.fetchone[0]
+    last_name = cursor.fetchone[1]
+    
+    otp = pyotp.random_base32()
+
+    cursor.execute("""UPDATE Voters SET OTP = ? WHERE voter_id = ?;""", (otp,VoterId))
+
+    otp = (pyotp.totp.TOTP(otp).provisioning_uri(name=f'{first_name+last_name}123@google.com', issuer_name='MitID'))
+
+    conn.commit()
+    conn.close()
+    
+    return render_template(
+        "otp.html",
+        onetimepass = otp
+    )
+
 @app.route("/",methods=['GET'])
 def main():
     return render_template(
             "index.html"
             )
 
-
 @app.route("/login",methods=['GET','POST'])
-def handle_method():
+def handle_method_login():
     if request.method == 'GET': 
         return render_template(
         "login.html"
@@ -81,7 +115,7 @@ def handle_method():
             password_user = cursor.fetchone()
 
             if password_user == None:
-                return {"Status": "Acess denied", "Error": "500"}
+                return {"Status": "Acess denied"}
 
             password_user = password_user[0]    
 
@@ -100,7 +134,7 @@ def handle_method():
                 registered = cursor.fetchone()[0]
 
                 if(registered == True):
-                    response = make_response(redirect("/voting"))
+                    response = make_response(redirect("/two_fac"))
                 else:
                     response = make_response(redirect("/register"))
 
@@ -109,7 +143,7 @@ def handle_method():
                 return response
 
             else:
-                return {"Status": "Acess denied", "Error": "500"}
+                return {"Status": "Acess denied"}
 
     else:
         return {"Status": "Not found", "Error": "404"}
@@ -129,6 +163,12 @@ def submit_vote():
         with sqlite3.connect("voting.db") as conn:
             cursor = conn.cursor() 
 
+        token = request.cookies.get("session_token")
+        cursor.execute("SELECT Voter_ID FROM Session_view WHERE ((session_token = ?) AND (has_voted = 0) AND (MFA_VERIFIED = 1))",(token,))
+        
+        if(cursor.fetchone() == None):
+            return(make_response(redirect("/")))
+        
         try:
             candidate = request.form["candidate"]
             cursor.execute("""SELECT Candidate_id FROM Candidates WHERE Candidate_name = ?""", (candidate,))
@@ -138,7 +178,10 @@ def submit_vote():
             cursor.execute(
             "INSERT INTO votes (candidate_id,party_id) VALUES (?,(SELECT party_id FROM Candidates WHERE Candidate_id = ?))",
             (vote,vote,)
-            )   
+            ) 
+
+            cursor.execute("""UPDATE Sessions SET has_voted = 1 WHERE session_token = ?;""", (token))
+
         except:
             party = request.form["party"]
             cursor.execute("""SELECT Party_id FROM Parties WHERE Party_name = ?""", (party,))
@@ -148,43 +191,60 @@ def submit_vote():
             "INSERT INTO votes (party_id) VALUES (?)",
                 (vote,)
                 )
+            
         finally:
             conn.commit()
-            if vote is None:
-                return{"status": "error"} # her ser vi lige om de har gemt
-            else:
-                return render_template(
-                "confirmation.html",
-                    vote = vote
-                    )
+            conn.close()
 
-@app.get("/register")
+        if vote is None:
+            return{"status": "error"} # her ser vi lige om de har gemt
+        
+        else:
+            return render_template(
+            "confirmation.html",
+                vote = vote
+                )
 
-def register():
+@app.route("/two_fac",methods=['GET','POST'])
+def handle_method_twofac():
     token = request.cookies.get("session_token")
+    cursor.execute("SELECT Voter_ID WHERE ((session_token = ?) AND (has_voted = 0))",(token,))
+        
+    if(cursor.fetchone() == None):
+            return(make_response(redirect("/")))
 
-    with sqlite3.connect("voting.db") as conn:
-        cursor = conn.cursor()
-
-    cursor.execute("""SELECT Voter_ID FROM Session_view WHERE session_token = ? LIMIT 1;""",(token,))
-    voterId = cursor.fetchone()
+    if request.method == 'GET':
+        return render_template(
+            "twofac.html"
+        )
     
-    if token is None or voterId is None:
-        return redirect("/login")
+    elif request.method == 'POST':
+        token = request.cookies.get("session_token")
+        hotp = request.form["HOTP"]
 
-    VoterId = VoterId[0]
+    else:
+        return {"Status": "Not found", "Error": "404"}
 
-    cursor.execute("""SELECT First_name FROM Voters WHERE VoterID = ? LIMIT 1""",(VoterId,))
-    name = cursor.fetchone[0]
-    
-    otp = pyotp.random_base32()
-    cursor.execute
+@app.route("/register",methods=['GET','POST'])
+def handle_method_register():
 
-    otp = (pyotp.totp.TOTP(otp).provisioning_uri(name=f'{name}@google.com', issuer_name='MitID'))
+    token = request.cookies.get("session_token")
+    cursor.execute("SELECT Voter_ID WHERE ((session_token = ?) AND (has_voted = 0))",(token,))
+        
+    if(cursor.fetchone() == None):
+        return(make_response(redirect("/")))
 
+    if request.method == 'GET':
+        return(register())
+    elif request.method == 'POST':
+        hotp = request.form["HOTP"]
+    else:
+        return {"Status": "Not found", "Error": "404"}
+
+@app.get("/reciept")
+def confirmation():
     return render_template(
-        "otp.html",
-        onetimepass = otp
+        "confirmation.html"
     )
 
 app.run(
@@ -192,7 +252,6 @@ app.run(
     port=5000,
     debug=True
 )
-
 
 with sqlite3.connect("voting.db") as conn:
     cursor = conn.cursor()

@@ -14,6 +14,8 @@ def hashBcr(password,salt):
     return hash
 
 def hashSha(password):
+    password = str(password)
+
     hash_object = hashlib.sha256()
 
     hash_object.update(password.encode('utf-8'))
