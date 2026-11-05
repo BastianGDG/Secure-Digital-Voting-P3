@@ -164,4 +164,5 @@ def lookupSeed(id):
     print(f"Password: {password}")
 
 
-makePeople(1000)
+
+makePeople(100)

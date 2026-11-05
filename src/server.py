@@ -89,6 +89,10 @@ def register():
         onetimepass = otp
     )
 
+def chk_perms(level):
+    pass
+
+
 @app.route("/",methods=['GET'])
 def main():
     return render_template(
