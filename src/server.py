@@ -87,14 +87,14 @@ def register(token,otp):
     first_name = names[0]
     last_name = names[1]
 
-    otp = (pyotp.totp.TOTP(otp).provisioning_uri(name=f'{first_name+last_name}123@google.com', issuer_name='MitID'))
+    totp = (pyotp.totp.TOTP(otp).provisioning_uri(name=f'{first_name+last_name}123@google.com', issuer_name='MitID'))
 
     conn.commit()
     conn.close()
     
     return render_template(
         "otp.html",
-        onetimepass = otp
+        onetimepass = totp
     )
 
 def chk_perms(token,level):
@@ -130,20 +130,6 @@ def chk_expiry(token):
     else:
         # sesion not expired
         return False
-
-def chk_mfa(token):
-    with sqlite3.connect("voting.db") as conn:
-        cursor = conn.cursor()
-    cursor.execute("""SELECT voter_Id FROM SESSION_VIEW WHERE ((MFA_VERIFIED = 1) AND (sesion_token = ?));""", (token,))
-    result = cursor.fetchone()
-
-    if(result):
-        # User has verified
-        return True
-    else:
-        # User has not verifeid
-        return False
-    
 
 @app.route("/",methods=['GET'])
 def main():
@@ -215,27 +201,37 @@ def handle_method_register():
         print("no perms")
         return(make_response(redirect("/")))
 
-    otp = pyotp.random_base32()
+    with sqlite3.connect("voting.db") as conn:
+        cursor = conn.cursor()
+
+    cursor.execute("""SELECT voter_id FROM session_view WHERE ((session_token = ?) AND (mfa_verified = 1));""",(token,))
+    if(cursor.fetchone()):
+        return(make_response(redirect("/two_fac")))
+
+    totp = pyotp.random_base32()
+
+    cursor.execute("""SELECT voter_id FROM session_view WHERE session_token = ? LIMIT 1;""",(token,))
+    VoterId = cursor.fetchone()
+
+    if(not VoterId):
+        return(make_response(redirect("/login")))
+
+    VoterId = VoterId[0]
+
+    cursor.execute("""UPDATE Voters SET OTP = ? WHERE voter_id = ?;""", (totp,VoterId))
 
     if request.method == 'GET':
-        response = register(token,otp)
+        response = register(token,totp)
         return(response)
     
     elif request.method == 'POST':
-        totp = request.form["TOTP"]
+        otp = request.form["OTP"]
+        print(otp)
+        print(pyotp.TOTP(totp).now())
 
-        if(otp.verify(totp)):
-            with sqlite3.connect("voting.db") as conn:
-                cursor = conn.cursor()
-            cursor.execute("""SELECT voter_id FROM session_view WHERE session_token = ? LIMIT 1;""",(token,))
-            VoterId = cursor.fetchone()
+        if(pyotp.TOTP(totp).verify(otp)):
 
-            if(not VoterId):
-                return(make_response(redirect("/register")))
-
-            VoterId = VoterId[0]
-
-            cursor.execute("""UPDATE Voters SET OTP = ?, MFA_VERIFIED = 1 WHERE voter_id = ?;""", (otp,VoterId))
+            cursor.execute("""UPDATE Sessions SET mfa_verified = 1 WHERE voter_id = ?""", (VoterId))
         else:
             return{"Error": "Wrong OTP"}
     else:
@@ -248,20 +244,44 @@ def handle_method_twofac():
     if(chk_expiry(token) == True):
         return(make_response(redirect("/login")))
 
-    cursor.execute("SELECT Voter_ID WHERE ((session_token = ?) AND (has_voted = 0))",(token,))
+    if(not chk_perms(token,1)):
+        return(make_response(redirect("/register")))
+
+    with sqlite3.connect("voting.db") as conn:
+            cursor = conn.cursor()
+    cursor.execute("SELECT Voter_ID FROM Session_view WHERE ((session_token = ?) AND (has_voted = 0) AND (mfa_verified = 1))",(token,))
         
     if(cursor.fetchone() == None):
-            return(make_response(redirect("/")))
+            return(make_response(redirect("/login")))
+
+    voterID = cursor.fetchone()
+    voterID = voterID[0]
 
     if request.method == 'GET':
+        conn.close()
         return render_template(
             "twofac.html"
         )
     
     elif request.method == 'POST':
-        token = request.cookies.get("session_token")
-        hotp = request.form["HOTP"]
+        totp = request.form["TOTP"]
+        totp = int(totp)
 
+        cursor.execute("""SELECT OTP From Voters_view WHERE((Voter_id = ?) AND (Has_voted = 0))""",(voterID,))
+        otp = cursor.fetchone()
+        otp = otp[0]
+
+        if(otp.verify(totp)):
+            cursor.execute("""UPDATE Sessions SET mfa_verified = 1 WHERE voter_id = ?""", (voterID,))
+            response = make_response(redirect("/voting"))
+
+            return(updateToken(voterID,response))
+        
+        else:
+            return render_template(
+            "twofac.html"
+        )
+            
     else:
         return {"Status": "Not found", "Error": "404"}
     
@@ -271,6 +291,9 @@ def get_voting_sheet():
 
     if(chk_expiry(token) == True):
         return(make_response(redirect("/login")))
+    
+    if(not chk_perms(token,1)):
+        return(make_response(redirect("/register")))
 
     parties = getCandidates()
 
@@ -334,6 +357,9 @@ def confirmation():
 
     if(chk_expiry(token) == True):
         return(make_response(redirect("/login")))
+
+    if(not chk_perms(token,1)):
+        return(make_response(redirect("/register")))
 
     return render_template(
         "confirmation.html"

@@ -2,6 +2,16 @@
 <html>
   <body>
     <canvas id="canvas"></canvas>
+    <form action="" method="post">
+    <h2>scan the QR code with Authenticator app</h2>
+    <h2>Authenticator code</h2>
+    <input type="number"
+        name="OTP" >
+
+   <button type="submit" formaction="/register">
+        submit
+    </button>
+    </form>
 
     <script type="module">
       import QRCode from 'https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm';
