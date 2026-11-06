@@ -3,6 +3,7 @@ import sqlite3
 import pyotp
 from crypto import hashBcr, hashSha
 import secrets
+from datetime import datetime, timezone
 
 # ---- Setup ------
 
@@ -40,7 +41,14 @@ def updateToken(result,response):
     with sqlite3.connect("voting.db") as conn:
         cursor = conn.cursor()
     token = secrets.token_urlsafe(32)
-    cursor.execute("""UPDATE Sessions SET session_token = ? WHERE voter_id = ?;""", (token,result,))
+
+    cursor.execute("""SELECT * FROM session_view WHERE voter_id = ?""",(result,))
+
+    if(cursor.fetchone()):
+        cursor.execute("""UPDATE Sessions SET session_token = ?, created_at = datetime('now'), expires_at = datetime('now', '+1 hour') WHERE voter_id = ?;""", (token,result,))
+    else:
+        cursor.execute("""INSERT INTO Sessions (voter_id,session_token,has_voted,mfa_verified) VALUES (?,?,0,0)""",(result,token))
+
     conn.commit()
 
     response = response
@@ -50,34 +58,34 @@ def updateToken(result,response):
             token,
              httponly=True,
             #secure=True,
-            samesite="Lax"
+            samesite="Strict"
              )
     
     return response
 
-def register():
-    token = request.cookies.get("session_token")
-
+def register(token,otp):
     print(f"Token: {token}")
 
     with sqlite3.connect("voting.db") as conn:
         cursor = conn.cursor()
 
-    cursor.execute("""SELECT Voter_ID FROM Session_view WHERE session_token = ? LIMIT 1;""",(token,))
-    voterId = cursor.fetchone()
+    try:
+        cursor.execute("""SELECT Voter_ID FROM Session_view WHERE ((session_token = ?) AND (has_voted = 0)) LIMIT 1;""",(token,))
+        voterID = cursor.fetchone()
+    except:
+        voterID = None
     
-    if token is None or voterId is None:
+    if (token is None) or (voterID is None):
         return redirect("/login")
 
-    VoterId = VoterId[0]
+    print(f"Voter ID: {voterID}")
+    voterID = voterID[0]
 
-    cursor.execute("""SELECT First_name, Last_name FROM Voters WHERE Voter_ID = ? LIMIT 1""",(VoterId,))
-    first_name = cursor.fetchone[0]
-    last_name = cursor.fetchone[1]
-    
-    otp = pyotp.random_base32()
+    cursor.execute("""SELECT First_name, Last_name FROM Voters WHERE Voter_ID = ? LIMIT 1""",(voterID,))
+    names = cursor.fetchone()
 
-    cursor.execute("""UPDATE Voters SET OTP = ? WHERE voter_id = ?;""", (otp,VoterId))
+    first_name = names[0]
+    last_name = names[1]
 
     otp = (pyotp.totp.TOTP(otp).provisioning_uri(name=f'{first_name+last_name}123@google.com', issuer_name='MitID'))
 
@@ -89,9 +97,53 @@ def register():
         onetimepass = otp
     )
 
-def chk_perms(level):
-    pass
+def chk_perms(token,level):
+    with sqlite3.connect("voting.db") as conn:
+        cursor = conn.cursor()
+    if level > 0:
+        cursor.execute("SELECT Voter_ID FROM Session_view WHERE ((session_token = ?) AND (has_voted = 0) AND (MFA_VERIFIED = ?))",(token,level))
+    else:
+        cursor.execute("SELECT Voter_ID FROM Session_view WHERE ((session_token = ?) AND (has_voted = 0))",(token,))
+    result = cursor.fetchone()
+    conn.close()
+    return result
 
+def chk_expiry(token):
+    with sqlite3.connect("voting.db") as conn:
+        cursor = conn.cursor()
+
+    cursor.execute("""SELECT expires_at from SESSION_VIEW WHERE session_token = ?""",(token,))
+    expires_at = cursor.fetchone()
+
+    if(not expires_at):
+        # session doesnt exist
+        return True
+
+    expires_at = expires_at[0]
+
+    expiry = datetime.strptime(expires_at, "%Y-%m-%d %H:%M:%S")
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    if now >= expiry:
+        cursor.execute("""UPDATE Voters SET MFA_VERIFIED = 0 WHERE voter_id = (SELECT Voter_ID from Session_view WHERE session_token = ?);""", (token,))
+        return True
+    else:
+        # sesion not expired
+        return False
+
+def chk_mfa(token):
+    with sqlite3.connect("voting.db") as conn:
+        cursor = conn.cursor()
+    cursor.execute("""SELECT voter_Id FROM SESSION_VIEW WHERE ((MFA_VERIFIED = 1) AND (sesion_token = ?));""", (token,))
+    result = cursor.fetchone()
+
+    if(result):
+        # User has verified
+        return True
+    else:
+        # User has not verifeid
+        return False
+    
 
 @app.route("/",methods=['GET'])
 def main():
@@ -152,9 +204,74 @@ def handle_method_login():
     else:
         return {"Status": "Not found", "Error": "404"}
 
+@app.route("/register",methods=['GET','POST'])
+def handle_method_register():
+    token = request.cookies.get("session_token")
 
+    if(chk_expiry(token) == True):
+        return(make_response(redirect("/login")))
+
+    if(not chk_perms(token,0)):
+        print("no perms")
+        return(make_response(redirect("/")))
+
+    otp = pyotp.random_base32()
+
+    if request.method == 'GET':
+        response = register(token,otp)
+        return(response)
+    
+    elif request.method == 'POST':
+        totp = request.form["TOTP"]
+
+        if(otp.verify(totp)):
+            with sqlite3.connect("voting.db") as conn:
+                cursor = conn.cursor()
+            cursor.execute("""SELECT voter_id FROM session_view WHERE session_token = ? LIMIT 1;""",(token,))
+            VoterId = cursor.fetchone()
+
+            if(not VoterId):
+                return(make_response(redirect("/register")))
+
+            VoterId = VoterId[0]
+
+            cursor.execute("""UPDATE Voters SET OTP = ?, MFA_VERIFIED = 1 WHERE voter_id = ?;""", (otp,VoterId))
+        else:
+            return{"Error": "Wrong OTP"}
+    else:
+        return {"Status": "Not found", "Error": "404"}
+
+@app.route("/two_fac",methods=['GET','POST'])
+def handle_method_twofac():
+    token = request.cookies.get("session_token")
+
+    if(chk_expiry(token) == True):
+        return(make_response(redirect("/login")))
+
+    cursor.execute("SELECT Voter_ID WHERE ((session_token = ?) AND (has_voted = 0))",(token,))
+        
+    if(cursor.fetchone() == None):
+            return(make_response(redirect("/")))
+
+    if request.method == 'GET':
+        return render_template(
+            "twofac.html"
+        )
+    
+    elif request.method == 'POST':
+        token = request.cookies.get("session_token")
+        hotp = request.form["HOTP"]
+
+    else:
+        return {"Status": "Not found", "Error": "404"}
+    
 @app.get("/voting")
 def get_voting_sheet():
+    token = request.cookies.get("session_token")
+
+    if(chk_expiry(token) == True):
+        return(make_response(redirect("/login")))
+
     parties = getCandidates()
 
     return render_template(
@@ -168,8 +285,10 @@ def submit_vote():
             cursor = conn.cursor() 
 
         token = request.cookies.get("session_token")
-        cursor.execute("SELECT Voter_ID FROM Session_view WHERE ((session_token = ?) AND (has_voted = 0) AND (MFA_VERIFIED = 1))",(token,))
-        
+
+        if(chk_expiry(token) == True):
+            return(make_response(redirect("/login")))
+         
         if(cursor.fetchone() == None):
             return(make_response(redirect("/")))
         
@@ -208,52 +327,21 @@ def submit_vote():
             "confirmation.html",
                 vote = vote
                 )
-
-@app.route("/two_fac",methods=['GET','POST'])
-def handle_method_twofac():
-    token = request.cookies.get("session_token")
-    cursor.execute("SELECT Voter_ID WHERE ((session_token = ?) AND (has_voted = 0))",(token,))
         
-    if(cursor.fetchone() == None):
-            return(make_response(redirect("/")))
-
-    if request.method == 'GET':
-        return render_template(
-            "twofac.html"
-        )
-    
-    elif request.method == 'POST':
-        token = request.cookies.get("session_token")
-        hotp = request.form["HOTP"]
-
-    else:
-        return {"Status": "Not found", "Error": "404"}
-
-@app.route("/register",methods=['GET','POST'])
-def handle_method_register():
-
-    token = request.cookies.get("session_token")
-    cursor.execute("SELECT Voter_ID WHERE ((session_token = ?) AND (has_voted = 0))",(token,))
-        
-    if(cursor.fetchone() == None):
-        return(make_response(redirect("/")))
-
-    if request.method == 'GET':
-        return(register())
-    elif request.method == 'POST':
-        hotp = request.form["HOTP"]
-    else:
-        return {"Status": "Not found", "Error": "404"}
-
 @app.get("/reciept")
 def confirmation():
+    token = request.form["session_token"]
+
+    if(chk_expiry(token) == True):
+        return(make_response(redirect("/login")))
+
     return render_template(
         "confirmation.html"
     )
 
 app.run(
     host="127.0.0.1",
-    port=5000,
+    port=80,
     debug=True
 )
 

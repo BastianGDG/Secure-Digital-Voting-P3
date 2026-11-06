@@ -165,4 +165,4 @@ def lookupSeed(id):
 
 
 
-makePeople(100)
+lookupSeed(68)
