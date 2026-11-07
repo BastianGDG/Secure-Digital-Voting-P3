@@ -63,7 +63,7 @@ def updateToken(result,response):
     
     return response
 
-def register(token,otp):
+def register(token,totp):
     print(f"Token: {token}")
 
     with sqlite3.connect("voting.db") as conn:
@@ -87,7 +87,7 @@ def register(token,otp):
     first_name = names[0]
     last_name = names[1]
 
-    totp = (pyotp.totp.TOTP(otp).provisioning_uri(name=f'{first_name+last_name}123@google.com', issuer_name='MitID'))
+    totp = (pyotp.totp.TOTP(str(totp)).provisioning_uri(name=f'{first_name+last_name}123@google.com', issuer_name='MitID'))
 
     conn.commit()
     conn.close()
@@ -198,7 +198,6 @@ def handle_method_register():
         return(make_response(redirect("/login")))
 
     if(not chk_perms(token,0)):
-        print("no perms")
         return(make_response(redirect("/")))
 
     with sqlite3.connect("voting.db") as conn:
@@ -208,8 +207,6 @@ def handle_method_register():
     if(cursor.fetchone()):
         return(make_response(redirect("/two_fac")))
 
-    totp = pyotp.random_base32()
-
     cursor.execute("""SELECT voter_id FROM session_view WHERE session_token = ? LIMIT 1;""",(token,))
     VoterId = cursor.fetchone()
 
@@ -218,23 +215,40 @@ def handle_method_register():
 
     VoterId = VoterId[0]
 
-    cursor.execute("""UPDATE Voters SET OTP = ? WHERE voter_id = ?;""", (totp,VoterId))
+    print(VoterId)
+
+    cursor.execute("""SELECT OTP FROM Voters_view WHERE Voter_id = ?""",(VoterId,))
+    totp = cursor.fetchone()[0]
+
+    print(totp)
+
+    if totp is None:
+        totp = pyotp.random_base32()
+        print(totp)
+        cursor.execute("""UPDATE Voters SET OTP = ? WHERE voter_id = ?;""", (totp,VoterId))
+        conn.commit()
+    else:
+        pass
 
     if request.method == 'GET':
+        print(totp)
         response = register(token,totp)
         return(response)
     
     elif request.method == 'POST':
         otp = request.form["OTP"]
-        print(otp)
+        print(f"OTP: {otp}")
+        print(f"TOTP: {totp}")
         print(pyotp.TOTP(totp).now())
 
         if(pyotp.TOTP(totp).verify(otp)):
-
             cursor.execute("""UPDATE Sessions SET mfa_verified = 1 WHERE voter_id = ?""", (VoterId))
+            conn.commit()
         else:
+            conn.close()
             return{"Error": "Wrong OTP"}
     else:
+        conn.close()
         return {"Status": "Not found", "Error": "404"}
 
 @app.route("/two_fac",methods=['GET','POST'])

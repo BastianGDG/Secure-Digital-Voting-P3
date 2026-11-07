@@ -20,6 +20,16 @@ REFERENCES Parties(party_id)
 )
 """)
 
+cursor.execute("""CREATE TABLE Voters (
+    voter_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    first_name VARCHAR(255) NOT NULL,
+    last_name VARCHAR(255) NOT NULL,
+    cpr_hash CHAR(32) UNIQUE NOT NULL,
+    eligible BOOLEAN NOT NULL,
+    password_hash VARCHAR(60) NOT NULL UNIQUE,
+    has_registered BOOLEAN NOT NULL DEFAULT 0,
+    OTP CHAR(32) UNIQUE
+)""")
 
 def party_count():
     cursor.execute("""SELECT COUNT(party_id) FROM Parties""")

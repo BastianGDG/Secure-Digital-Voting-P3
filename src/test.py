@@ -1,7 +1,7 @@
 import pyotp
-totp = pyotp.TOTP("E3GKK6POTZFIZVO5UPEUJKQO7CIB36UL")
+totp = pyotp.TOTP("7K6JTZ763GKK64PNQIMCMZSZ3SVUD2SS")
 print(totp.now())
 print("Current OTP:", totp.verify(233217))
 
-otp = totp.now()
-print(pyotp.TOTP("E3GKK6POTZFIZVO5UPEUJKQO7CIB36UL").verify(otp))
+otp = "123123"
+print(pyotp.TOTP("7K6JTZ763GKK64PNQIMCMZSZ3SVUD2SS").verify(otp))

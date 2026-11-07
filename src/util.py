@@ -165,4 +165,4 @@ def lookupSeed(id):
 
 
 
-lookupSeed(68)
+lookupSeed(14)
