@@ -89,6 +89,8 @@ def register(token,totp):
 
     totp = (pyotp.totp.TOTP(str(totp)).provisioning_uri(name=f'{first_name+last_name}123@google.com', issuer_name='MitID'))
 
+    print(totp)
+
     conn.commit()
     conn.close()
     
@@ -242,9 +244,13 @@ def handle_method_register():
         print(pyotp.TOTP(totp).now())
 
         if(pyotp.TOTP(totp).verify(otp)):
-            cursor.execute("""UPDATE Sessions SET mfa_verified = 1 WHERE voter_id = ?""", (VoterId))
+            cursor.execute("""UPDATE Voters SET has_registered = 1 WHERE voter_id = ?""", (VoterId,))
+            cursor.execute("""UPDATE Sessions SET mfa_verified = 1 WHERE voter_id = ?""", (VoterId,))
             conn.commit()
+
+            return(updateToken(VoterId,make_response(redirect("/voting"))))
         else:
+            
             conn.close()
             return{"Error": "Wrong OTP"}
     else:
