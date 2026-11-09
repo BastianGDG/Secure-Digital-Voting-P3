@@ -2,30 +2,31 @@
 <html>
 
 <body>
-<form action="" method="post">
+<form action="/submit_vote" method="post">
 
 {% for party, members in parties.items() %}
 
-    <h2>{{ party }}</h2>
-            <input type="radio"
-        name="party"
-        value="{{ party }}">
-    <label>{{party}}</label>
+    <h2>{{ party }} {{ abbreviations[loop.index0] }}</h2>
+
+    <input type="radio"
+           name="vote"
+           value="party:{{ party }}">
+    <label>{{ party }} {{ abbreviations[loop.index0] }}</label>
 
     {% for member in members %}
-
         <input type="radio"
-        name="candidate"
-        value="{{ member }}">
-
-        <label>{{member}}</label>
+               name="vote"
+               value="candidate:{{ member }}">
+        <label>{{ member }}</label>
 
     {% endfor %}
 
 {% endfor %}
-   <button type="submit" formaction="/submit_vote">
-        Submit Vote
-    </button>
+
+<button type="submit">
+    Submit Vote
+</button>
+
 </form>
 </body>
 

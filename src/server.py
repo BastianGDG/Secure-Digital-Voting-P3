@@ -4,10 +4,18 @@ import pyotp
 from crypto import hashBcr, hashSha
 import secrets
 from datetime import datetime, timezone
+import logging
 
 # ---- Setup ------
 
 app = Flask(__name__)
+
+logging.basicConfig(filename="voting.log",
+                    format='%(asctime)s %(levelname)s: %(message)s',
+                    filemode='w')
+
+logger = logging.getLogger()
+logger.setLevel(logging.DEBUG)
 
 # ----- Setup ------
 
@@ -20,7 +28,7 @@ def getCandidates():
     temp = []
 
     for i in cursor:
-        party = i[0] + " (" + i[1] + ")"
+        party = i[0]
         temp.append(party)
 
     parties={}
@@ -34,20 +42,28 @@ def getCandidates():
             cand.append(i[0])
         parties[temp[n]] = cand
 
-    return parties
+    cursor.execute("""SELECT ABBREVIATION FROM PARTIES_VIEW;""")
+    abbreviations = []
+    result = cursor.fetchone()
+
+    for i in range(len(temp)):
+        abbreviations.append(result[i])
+        
+    return parties, abbreviations
 
 def updateToken(result,response):
 
     with sqlite3.connect("voting.db") as conn:
         cursor = conn.cursor()
+
     token = secrets.token_urlsafe(32)
 
-    cursor.execute("""SELECT * FROM session_view WHERE voter_id = ?""",(result,))
+    cursor.execute("""SELECT * FROM session_view WHERE ((voter_id = ?) AND ((Select has_voted FROM Voters WHERE Voter_id = ?) = 0))""",(result,result,))
 
     if(cursor.fetchone()):
-        cursor.execute("""UPDATE Sessions SET session_token = ?, created_at = datetime('now'), expires_at = datetime('now', '+1 hour') WHERE voter_id = ?;""", (token,result,))
+        cursor.execute("""UPDATE Sessions SET session_token = ?, created_at = datetime('now', '+1 hour'), expires_at = datetime('now', '+1 hour', '+5 minute') WHERE voter_id = ?;""", (token,result,))
     else:
-        cursor.execute("""INSERT INTO Sessions (voter_id,session_token,has_voted,mfa_verified) VALUES (?,?,0,0)""",(result,token))
+        cursor.execute("""INSERT INTO Sessions (voter_id,session_token,mfa_verified) VALUES (?,?,0)""",(result,token))
 
     conn.commit()
 
@@ -89,8 +105,6 @@ def register(token,totp):
 
     totp = (pyotp.totp.TOTP(str(totp)).provisioning_uri(name=f'{first_name+last_name}123@google.com', issuer_name='MitID'))
 
-    print(totp)
-
     conn.commit()
     conn.close()
     
@@ -103,9 +117,11 @@ def chk_perms(token,level):
     with sqlite3.connect("voting.db") as conn:
         cursor = conn.cursor()
     if level > 0:
-        cursor.execute("SELECT Voter_ID FROM Session_view WHERE ((session_token = ?) AND (has_voted = 0) AND (MFA_VERIFIED = ?))",(token,level))
+        cursor.execute("""SELECT Voter_ID FROM Session_view WHERE session_token = ? AND MFA_VERIFIED = ? AND (
+                    SELECT has_voted FROM Voters WHERE Voters.voter_id = Session_view.Voter_ID) = 0;""",(token,level))
     else:
-        cursor.execute("SELECT Voter_ID FROM Session_view WHERE ((session_token = ?) AND (has_voted = 0))",(token,))
+        cursor.execute("""SELECT Voter_ID FROM Session_view WHERE session_token = ? AND (
+                    SELECT has_voted FROM Voters WHERE Voters.voter_id = Session_view.Voter_ID) = 0;""",(token,))
     result = cursor.fetchone()
     conn.close()
     return result
@@ -174,11 +190,16 @@ def handle_method_login():
             if(result):
                 result = result[0]
                 
-                cursor.execute("""SELECT Has_registered FROM VOTERS_VIEW WHERE Voter_id = ? LIMIT 1;""",(result,))
-                registered = cursor.fetchone()[0]
+                cursor.execute("""SELECT Has_registered,Has_voted FROM VOTERS_VIEW WHERE Voter_id = ? LIMIT 1;""",(result,))
+                
+                row = cursor.fetchone()
+                registered = row[0]
+                voted = row[1]
 
                 if(registered == True):
                     response = make_response(redirect("/two_fac"))
+                elif(voted == True):
+                    return make_response(redirect("/confirmation"))
                 else:
                     response = make_response(redirect("/register"))
 
@@ -200,13 +221,13 @@ def handle_method_register():
         return(make_response(redirect("/login")))
 
     if(not chk_perms(token,0)):
-        return(make_response(redirect("/")))
+        return(make_response(redirect("/login")))
 
     with sqlite3.connect("voting.db") as conn:
         cursor = conn.cursor()
 
-    cursor.execute("""SELECT voter_id FROM session_view WHERE ((session_token = ?) AND (mfa_verified = 1));""",(token,))
-    if(cursor.fetchone()):
+    cursor.execute("""SELECT has_registered FROM voters_view WHERE Voter_ID = ((SELECT Voter_ID FROM Session_VIEW WHERE session_token = ?));""",(token,))
+    if(cursor.fetchone()[0] == 1):
         return(make_response(redirect("/two_fac")))
 
     cursor.execute("""SELECT voter_id FROM session_view WHERE session_token = ? LIMIT 1;""",(token,))
@@ -239,9 +260,6 @@ def handle_method_register():
     
     elif request.method == 'POST':
         otp = request.form["OTP"]
-        print(f"OTP: {otp}")
-        print(f"TOTP: {totp}")
-        print(pyotp.TOTP(totp).now())
 
         if(pyotp.TOTP(totp).verify(otp)):
             cursor.execute("""UPDATE Voters SET has_registered = 1 WHERE voter_id = ?""", (VoterId,))
@@ -264,19 +282,21 @@ def handle_method_twofac():
     if(chk_expiry(token) == True):
         return(make_response(redirect("/login")))
 
-    if(not chk_perms(token,1)):
+    if(not chk_perms(token,0)):
         return(make_response(redirect("/register")))
 
     with sqlite3.connect("voting.db") as conn:
             cursor = conn.cursor()
-    cursor.execute("SELECT Voter_ID FROM Session_view WHERE ((session_token = ?) AND (has_voted = 0) AND (mfa_verified = 1))",(token,))
-        
-    if(cursor.fetchone() == None):
-            return(make_response(redirect("/login")))
+
+    cursor.execute("SELECT Voter_ID FROM Session_view WHERE (session_token = ?)",(token,))
 
     voterID = cursor.fetchone()
-    voterID = voterID[0]
 
+    if(not voterID):
+        return(make_response(redirect("/login")))
+
+    voterID = voterID[0]
+    
     if request.method == 'GET':
         conn.close()
         return render_template(
@@ -284,15 +304,18 @@ def handle_method_twofac():
         )
     
     elif request.method == 'POST':
-        totp = request.form["TOTP"]
-        totp = int(totp)
+        otp = request.form["OTP"]
+        otp = int(otp)
 
         cursor.execute("""SELECT OTP From Voters_view WHERE((Voter_id = ?) AND (Has_voted = 0))""",(voterID,))
-        otp = cursor.fetchone()
-        otp = otp[0]
+        totp = cursor.fetchone()
+        totp = totp[0]
 
-        if(otp.verify(totp)):
+        if(pyotp.TOTP(totp).verify(otp)):
             cursor.execute("""UPDATE Sessions SET mfa_verified = 1 WHERE voter_id = ?""", (voterID,))
+            conn.commit()
+            conn.close()
+
             response = make_response(redirect("/voting"))
 
             return(updateToken(voterID,response))
@@ -315,72 +338,81 @@ def get_voting_sheet():
     if(not chk_perms(token,1)):
         return(make_response(redirect("/register")))
 
-    parties = getCandidates()
+    parties,abbreviations = getCandidates()
+
+    print(abbreviations)
 
     return render_template(
         "voting.html",
-        parties = parties
+        parties = parties,
+        abbreviations = abbreviations
         )
 
 @app.post("/submit_vote")
 def submit_vote():
-        with sqlite3.connect("voting.db") as conn:
-            cursor = conn.cursor() 
+    with sqlite3.connect("voting.db") as conn:
+        cursor = conn.cursor() 
 
-        token = request.cookies.get("session_token")
-
-        if(chk_expiry(token) == True):
-            return(make_response(redirect("/login")))
-         
-        if(cursor.fetchone() == None):
-            return(make_response(redirect("/")))
-        
-        try:
-            candidate = request.form["candidate"]
-            cursor.execute("""SELECT Candidate_id FROM Candidates WHERE Candidate_name = ?""", (candidate,))
-            candidate = cursor.fetchone()
-            vote = candidate[0] # for at sikre os det er en kandidat
-            
-            cursor.execute(
-            "INSERT INTO votes (candidate_id,party_id) VALUES (?,(SELECT party_id FROM Candidates WHERE Candidate_id = ?))",
-            (vote,vote,)
-            ) 
-
-            cursor.execute("""UPDATE Sessions SET has_voted = 1 WHERE session_token = ?;""", (token))
-
-        except:
-            party = request.form["party"]
-            cursor.execute("""SELECT Party_id FROM Parties WHERE Party_name = ?""", (party,))
-            party = cursor.fetchone() # fetchone() kalder funktionen og henter resultatet fra SQL.
-            vote = party[0]
-            cursor.execute(
-            "INSERT INTO votes (party_id) VALUES (?)",
-                (vote,)
-                )
-            
-        finally:
-            conn.commit()
-            conn.close()
-
-        if vote is None:
-            return{"status": "error"} # her ser vi lige om de har gemt
-        
-        else:
-            return render_template(
-            "confirmation.html",
-                vote = vote
-                )
-        
-@app.get("/reciept")
-def confirmation():
-    token = request.form["session_token"]
+    token = request.cookies.get("session_token")
 
     if(chk_expiry(token) == True):
         return(make_response(redirect("/login")))
 
     if(not chk_perms(token,1)):
-        return(make_response(redirect("/register")))
+        return(make_response(redirect("/login")))   
 
+    vote = request.form.get("vote")
+
+    vote_type, vote_value = vote.split(":", 1)
+
+    if vote_type == "candidate":
+        cursor.execute("""SELECT Candidate_id FROM Candidates WHERE Candidate_name = ?""", (vote_value,))
+        candidate = cursor.fetchone()
+        vote = candidate[0] # for at sikre os det er en kandidat
+        
+        cursor.execute(
+        "INSERT INTO votes (candidate_id,party_id,timestamp) VALUES (?,(SELECT party_id FROM Candidates WHERE Candidate_id = ?),(strftime('%Y-%m-%d %H:%M:%f', 'now')))",
+        (vote,vote,)
+        ) 
+
+    elif vote_type == "party":
+        print(vote_value)
+        cursor.execute("""SELECT party_id FROM Parties WHERE Party_name = ?""", (vote_value,))
+        party = cursor.fetchone()
+        vote = party[0] # for at sikre os det er en kandidat
+        
+        cursor.execute(
+        "INSERT INTO votes (candidate_id,party_id,timestamp) VALUES (?,(SELECT party_id FROM Candidates WHERE Candidate_id = ?),(strftime('%Y-%m-%d %H:%M:%f', 'now')))",
+        (None,vote,)
+        ) 
+    
+    else:
+        return{"status": "error"}    
+
+    try:
+        cursor.execute("""UPDATE Voters SET has_voted = 1 WHERE Voter_Id = (SELECT Voter_id from Sessions WHERE session_token = ?);""", (token,))
+        cursor.execute("""SELECT Voter_ID From Session_view WHERE session_token = ?""",(token,))
+        ID = cursor.fetchone()
+
+        cursor.execute("""DELETE FROM Sessions WHERE session_token = ?""",(token,))
+        
+        
+        logging.info("VOTE_ACCEPTED voter_id=%s", ID)
+
+        conn.commit()
+        conn.close()
+
+        return render_template(
+        "confirmation.html",
+            vote = vote
+            )
+    except:
+        return{"status": "error"}
+
+
+        
+@app.get("/reciept")
+def confirmation():
     return render_template(
         "confirmation.html"
     )
@@ -392,6 +424,5 @@ app.run(
 )
 
 with sqlite3.connect("voting.db") as conn:
-    cursor = conn.cursor()
     conn.commit()
     conn.close()

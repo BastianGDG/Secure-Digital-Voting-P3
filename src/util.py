@@ -123,7 +123,7 @@ def makePeople(amount):
         else: 
             otp = pyotp.random_base32()
             
-        cursor.execute("""INSERT INTO Voters (first_name,last_name,cpr_hash,eligible,password_hash,has_registered,otp) VALUES (?,?,?,?,?,?,?);""",(first_name,last_name,cpr,eligible,password,has_registered,otp,))
+        cursor.execute("""INSERT INTO Voters (first_name,last_name,cpr_hash,eligible,password_hash,has_registered,otp,has_voted) VALUES (?,?,?,?,?,?,?,0);""",(first_name,last_name,cpr,eligible,password,has_registered,otp,))
         cursor.execute("""INSERT INTO seeds (seed,VoterID) VALUES (?,(SELECT last_insert_rowid() FROM Voters))""",(s,))   
         
 
@@ -165,4 +165,4 @@ def lookupSeed(id):
 
 
 
-lookupSeed(14)
+registerPerson()
