@@ -3,8 +3,9 @@ import sqlite3
 import pyotp
 from crypto import hashBcr, hashSha
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime
 import logging
+from zoneinfo import ZoneInfo
 
 # ---- Setup ------
 
@@ -44,11 +45,10 @@ def getCandidates():
 
     cursor.execute("""SELECT ABBREVIATION FROM PARTIES_VIEW;""")
     abbreviations = []
-    result = cursor.fetchone()
 
-    for i in range(len(temp)):
-        abbreviations.append(result[i])
-        
+    for i in cursor:
+        abbreviations.append(i[0])
+
     return parties, abbreviations
 
 def updateToken(result,response):
@@ -66,6 +66,7 @@ def updateToken(result,response):
         cursor.execute("""INSERT INTO Sessions (voter_id,session_token,mfa_verified) VALUES (?,?,0)""",(result,token))
 
     conn.commit()
+    conn.close()
 
     response = response
 
@@ -107,7 +108,9 @@ def register(token,totp):
 
     conn.commit()
     conn.close()
-    
+         
+    logging.info("VOTER REGISTERED voter_id=%s", voterID)
+
     return render_template(
         "otp.html",
         onetimepass = totp
@@ -130,20 +133,24 @@ def chk_expiry(token):
     with sqlite3.connect("voting.db") as conn:
         cursor = conn.cursor()
 
-    cursor.execute("""SELECT expires_at from SESSION_VIEW WHERE session_token = ?""",(token,))
-    expires_at = cursor.fetchone()
+    cursor.execute("""SELECT expires_at,voter_id from SESSION_VIEW WHERE session_token = ? LIMIT 1""",(token,))
+    row = cursor.fetchone()
 
-    if(not expires_at):
+    if(not row):
         # session doesnt exist
         return True
 
-    expires_at = expires_at[0]
+    expiry = row[0]
+    voter_id = row[1]
 
-    expiry = datetime.strptime(expires_at, "%Y-%m-%d %H:%M:%S")
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    expiry = datetime.strptime(expiry, "%Y-%m-%d %H:%M:%S")
+    now = datetime.now(ZoneInfo("Europe/Copenhagen")).replace(tzinfo=None)
 
     if now >= expiry:
-        cursor.execute("""UPDATE Voters SET MFA_VERIFIED = 0 WHERE voter_id = (SELECT Voter_ID from Session_view WHERE session_token = ?);""", (token,))
+        logging.debug("COOKIE EXPIRED FOR SESSION: session_id=%s",voter_id)
+        cursor.execute("""UPDATE Sessions SET MFA_VERIFIED = 0 WHERE session_token = ?;""", (token,))
+        conn.commit()
+        conn.close()
         return True
     else:
         # sesion not expired
@@ -175,8 +182,9 @@ def handle_method_login():
             password_user = cursor.fetchone()
 
             if password_user == None:
-                return {"Status": "Acess denied"}
-
+                logging.info("LOGIN_FAIL ip=%s", request.remote_addr)
+                return make_response(redirect("/login"))
+        
             password_user = password_user[0]    
 
             salt = password_user[:29]
@@ -196,19 +204,21 @@ def handle_method_login():
                 registered = row[0]
                 voted = row[1]
 
-                if(registered == True):
+                if(voted == True):
+                    return make_response(redirect("/reciept"))
+                elif(registered == True):
                     response = make_response(redirect("/two_fac"))
-                elif(voted == True):
-                    return make_response(redirect("/confirmation"))
                 else:
                     response = make_response(redirect("/register"))
 
+                logging.info("LOGIN_SUCCESS voter_id=%s ip=%s", result, request.remote_addr)
                 response = updateToken(result,response)
 
                 return response
 
             else:
-                return {"Status": "Acess denied"}
+                logging.info("LOGIN_FAIL ip=%s", request.remote_addr)
+                return make_response(redirect("/login"))
 
     else:
         return {"Status": "Not found", "Error": "404"}
@@ -265,6 +275,7 @@ def handle_method_register():
             cursor.execute("""UPDATE Voters SET has_registered = 1 WHERE voter_id = ?""", (VoterId,))
             cursor.execute("""UPDATE Sessions SET mfa_verified = 1 WHERE voter_id = ?""", (VoterId,))
             conn.commit()
+            conn.close()
 
             return(updateToken(VoterId,make_response(redirect("/voting"))))
         else:
@@ -305,7 +316,6 @@ def handle_method_twofac():
     
     elif request.method == 'POST':
         otp = request.form["OTP"]
-        otp = int(otp)
 
         cursor.execute("""SELECT OTP From Voters_view WHERE((Voter_id = ?) AND (Has_voted = 0))""",(voterID,))
         totp = cursor.fetchone()
@@ -332,11 +342,14 @@ def handle_method_twofac():
 def get_voting_sheet():
     token = request.cookies.get("session_token")
 
+    if(token == None):
+        return(make_response(redirect("/login")))
+
     if(chk_expiry(token) == True):
         return(make_response(redirect("/login")))
     
     if(not chk_perms(token,1)):
-        return(make_response(redirect("/register")))
+        return(make_response(redirect("/login")))
 
     parties,abbreviations = getCandidates()
 
@@ -387,6 +400,7 @@ def submit_vote():
         ) 
     
     else:
+        logging.warning("VOTE_REJECTED voter_id=%s", ID)
         return{"status": "error"}    
 
     try:
@@ -395,27 +409,37 @@ def submit_vote():
         ID = cursor.fetchone()
 
         cursor.execute("""DELETE FROM Sessions WHERE session_token = ?""",(token,))
-        
-        
-        logging.info("VOTE_ACCEPTED voter_id=%s", ID)
+
+        if(cursor.fetchone[0] < 1):
+            pass
 
         conn.commit()
         conn.close()
+
+        logging.info("VOTE_ACCEPTED voter_id=%s", ID)
 
         return render_template(
         "confirmation.html",
             vote = vote
             )
     except:
+        logging.critical("VOTER NOT MARKED voter_id=%s ip=%s", ID, request.remote_addr)
         return{"status": "error"}
-
-
-        
+       
 @app.get("/reciept")
 def confirmation():
     return render_template(
         "confirmation.html"
     )
+
+with sqlite3.connect("voting.db") as conn:
+    cursor = conn.cursor()
+cursor.execute("""SELECT COUNT(ELIGIBLE) FROM Voters WHERE Eligible = 1;""")
+
+COUNT = cursor.fetchone()[0]
+
+conn.commit()
+conn.close()
 
 app.run(
     host="127.0.0.1",
@@ -423,6 +447,6 @@ app.run(
     debug=True
 )
 
-with sqlite3.connect("voting.db") as conn:
-    conn.commit()
-    conn.close()
+
+conn.commit()
+conn.close()
