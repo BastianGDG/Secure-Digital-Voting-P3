@@ -33,19 +33,19 @@ def registerPerson():
 
 
 first_names = [
-    "Nicolaj", "Mohammed", "Alice", "Anna", "Bob", "Askepot", "Ariel", "Baloo", 
+    "Nicolaj", "Mohammed", "Henning", "Alice", "Anna", "Bob", "Askepot", "Ariel", "Baloo", 
     "Bambi", "Boo", "Bell", "Quandale", "Dolly", "Dumble", "Darling", "Elsa", 
     "Theodor", "Annika", "Esmarelda", "Gamma", "Hades", "Hercules", "Hades", 
-    "Jafar", "David", "Carl", "Joe", "Peter", "Quagmire", "Klokkeblomst", 
+    "Jafar", "David", "Carl", "Joe", "Henning", "Peter", "Quagmire", "Klokkeblomst", 
     "Kala", "Lady", "Nikolaj", "Nicolai", "Nikolai", "Simba", "Windy", "Max", 
     "Merlin", "Mowgli", "Nala", "O'malley", "Olaf", "Pluto", "Pongo", "Pumba", 
     "Quasimodo", "Robin", "Mauga", "Biggus", "Benjamin",
     
-    "Søren", "Mads", "Freja", "Astrid", "Valdemar", "Holger", "Bente", "Egon", 
+    "Søren", "Mads", "Henning", "Freja", "Astrid", "Valdemar", "Holger", "Bente", "Egon", 
     "Benny", "Kjeld", "Yvonne", "Kasper", "Lærke", "Torben", "Jørgen", "Børge", 
-    "Viggo", "Ingrid", "Signe", "Rasmus", "Flemming", "Uffe",
+    "Viggo", "Ingrid", "Signe", "Rasmus", "Henning", "Flemming", "Uffe",
 
-    "Shrek", "Goku", "Doomfist", "Geralt", "Kratos", "SpongeBob", "Squidward", 
+    "Shrek", "Henning","Goku", "Doomfist", "Geralt", "Kratos", "SpongeBob", "Squidward", 
     "Walter", "Jesse", "Saul", "Gandalf", "Frodo", "Anakin", "Obi-Wan", 
     "Waluigi", "Wario", "Trevor", "GLaDOS", "Cortana", "Morbius", "Johnny", 
     "Arthur", "Solid", "Master", "Leeroy", "Kermit", "Boba", "Sheev", "Hugh", 
@@ -53,7 +53,7 @@ first_names = [
 
     "Emily", "Jack", "Sarah", "Connor", "Chloe", "Ethan", "Liam", "Olivia", 
     "Noah", "Grace", "Lucas", "Mason", "Zoe", "Hannah", "Nathan", "Caleb", 
-    "Chloe", "Wyatt", "Victoria", "Samuel"
+    "Chloe", "Wyatt", "Victoria", "Samuel", "Henning"
 ]
 
 last_names = [
@@ -163,6 +163,31 @@ def lookupSeed(id):
     print(f"CPR HASH: {hashSha(cpr)}")
     print(f"Password: {password}")
 
+def makeCandidates(amount,parties):
+    with sqlite3.connect("voting.db") as conn:
+        cursor = conn.cursor()
+    first_names_len = len(first_names) - 1
+    last_names_len = len(last_names) - 1
 
+    for i in range(amount):
+        print(f"Making candidate {i}")
+        s = secrets.token_hex(16)
 
-registerPerson()
+        random.seed(s)
+        
+        n = random.randint(0,first_names_len)
+        first_name = first_names[n]
+
+        n = random.randint(0,last_names_len)
+        last_name = last_names[n]
+
+        name = first_name + " " + last_name
+
+        party = random.randint(1,parties)
+
+        cursor.execute("""INSERT INTO Candidates (Candidate_name,Party_id) VALUES (?,?)""",(name,party,))
+
+    conn.commit()
+    conn.close()
+    
+lookupSeed(3)

@@ -1,4 +1,6 @@
 from flask import Flask, request, render_template, redirect, url_for, make_response
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 import sqlite3
 import pyotp
 from crypto import hashBcr, hashSha
@@ -10,6 +12,11 @@ from zoneinfo import ZoneInfo
 # ---- Setup ------
 
 app = Flask(__name__)
+
+limiter = Limiter(
+    key_func=get_remote_address,
+    app=app
+)
 
 logging.basicConfig(filename="voting.log",
                     format='%(asctime)s %(levelname)s: %(message)s',
@@ -33,8 +40,6 @@ def getCandidates():
         temp.append(party)
 
     parties={}
-
-    cursor.execute("""SELECT * FROM CANDIDATES_VIEW;""")
 
     for n in range(len(temp)):
         cand = []
@@ -74,7 +79,7 @@ def updateToken(result,response):
             "session_token",
             token,
              httponly=True,
-            #secure=True,
+            secure=True,
             samesite="Strict"
              )
     
@@ -87,7 +92,7 @@ def register(token,totp):
         cursor = conn.cursor()
 
     try:
-        cursor.execute("""SELECT Voter_ID FROM Session_view WHERE ((session_token = ?) AND (has_voted = 0)) LIMIT 1;""",(token,))
+        cursor.execute("""SELECT Voter_ID FROM Session_view WHERE (session_token = ?) LIMIT 1;""",(token,))
         voterID = cursor.fetchone()
     except:
         voterID = None
@@ -138,6 +143,8 @@ def chk_expiry(token):
 
     if(not row):
         # session doesnt exist
+        
+        conn.close()
         return True
 
     expiry = row[0]
@@ -154,15 +161,19 @@ def chk_expiry(token):
         return True
     else:
         # sesion not expired
+
+        conn.close()
         return False
 
 @app.route("/",methods=['GET'])
+@limiter.limit("10 per minute")
 def main():
     return render_template(
             "index.html"
             )
 
 @app.route("/login",methods=['GET','POST'])
+@limiter.limit("5 per minute")
 def handle_method_login():
     if request.method == 'GET': 
         return render_template(
@@ -224,6 +235,7 @@ def handle_method_login():
         return {"Status": "Not found", "Error": "404"}
 
 @app.route("/register",methods=['GET','POST'])
+@limiter.limit("5 per minute")
 def handle_method_register():
     token = request.cookies.get("session_token")
 
@@ -248,23 +260,17 @@ def handle_method_register():
 
     VoterId = VoterId[0]
 
-    print(VoterId)
-
     cursor.execute("""SELECT OTP FROM Voters_view WHERE Voter_id = ?""",(VoterId,))
     totp = cursor.fetchone()[0]
 
-    print(totp)
-
     if totp is None:
         totp = pyotp.random_base32()
-        print(totp)
         cursor.execute("""UPDATE Voters SET OTP = ? WHERE voter_id = ?;""", (totp,VoterId))
         conn.commit()
     else:
         pass
 
     if request.method == 'GET':
-        print(totp)
         response = register(token,totp)
         return(response)
     
@@ -274,12 +280,12 @@ def handle_method_register():
         if(pyotp.TOTP(totp).verify(otp)):
             cursor.execute("""UPDATE Voters SET has_registered = 1 WHERE voter_id = ?""", (VoterId,))
             cursor.execute("""UPDATE Sessions SET mfa_verified = 1 WHERE voter_id = ?""", (VoterId,))
+            
             conn.commit()
             conn.close()
 
             return(updateToken(VoterId,make_response(redirect("/voting"))))
         else:
-            
             conn.close()
             return{"Error": "Wrong OTP"}
     else:
@@ -287,6 +293,7 @@ def handle_method_register():
         return {"Status": "Not found", "Error": "404"}
 
 @app.route("/two_fac",methods=['GET','POST'])
+@limiter.limit("5 per minute")
 def handle_method_twofac():
     token = request.cookies.get("session_token")
 
@@ -321,6 +328,8 @@ def handle_method_twofac():
         totp = cursor.fetchone()
         totp = totp[0]
 
+        logging.info("%s",pyotp.TOTP(totp).now())
+
         if(pyotp.TOTP(totp).verify(otp)):
             cursor.execute("""UPDATE Sessions SET mfa_verified = 1 WHERE voter_id = ?""", (voterID,))
             conn.commit()
@@ -339,6 +348,7 @@ def handle_method_twofac():
         return {"Status": "Not found", "Error": "404"}
     
 @app.get("/voting")
+@limiter.limit("3 per minute")
 def get_voting_sheet():
     token = request.cookies.get("session_token")
 
@@ -362,6 +372,7 @@ def get_voting_sheet():
         )
 
 @app.post("/submit_vote")
+@limiter.limit("2 per minute")
 def submit_vote():
     with sqlite3.connect("voting.db") as conn:
         cursor = conn.cursor() 
@@ -410,8 +421,11 @@ def submit_vote():
 
         cursor.execute("""DELETE FROM Sessions WHERE session_token = ?""",(token,))
 
-        if(cursor.fetchone[0] < 1):
-            pass
+        cursor.execute("""SELECT COUNT(VoteID) FROM Votes""")
+        vote_count = cursor.fetchone()
+
+        if(vote_count[0] > COUNT):
+            logging.warning("VOTES EXCEEDED LIMIT: %s", vote_count[0])
 
         conn.commit()
         conn.close()
@@ -427,6 +441,7 @@ def submit_vote():
         return{"status": "error"}
        
 @app.get("/reciept")
+@limiter.limit("10 per minute")
 def confirmation():
     return render_template(
         "confirmation.html"
@@ -443,10 +458,10 @@ conn.close()
 
 app.run(
     host="127.0.0.1",
-    port=80,
+    port=443,
+    ssl_context=("cert.pem", "key.pem"),
     debug=True
 )
-
 
 conn.commit()
 conn.close()
