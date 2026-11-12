@@ -169,7 +169,8 @@ def chk_expiry(token):
 @limiter.limit("10 per minute")
 def main():
     return render_template(
-            "index.html"
+            "index.html",
+            closetime = "2026-11-13T00:00:00"
             )
 
 @app.route("/login",methods=['GET','POST'])
@@ -210,7 +211,6 @@ def handle_method_login():
                 result = result[0]
                 
                 cursor.execute("""SELECT Has_registered,Has_voted FROM VOTERS_VIEW WHERE Voter_id = ? LIMIT 1;""",(result,))
-                
                 row = cursor.fetchone()
                 registered = row[0]
                 voted = row[1]
@@ -457,7 +457,7 @@ conn.commit()
 conn.close()
 
 app.run(
-    host="127.0.0.1",
+    host="0.0.0.0",
     port=443,
     ssl_context=("cert.pem", "key.pem"),
     debug=True

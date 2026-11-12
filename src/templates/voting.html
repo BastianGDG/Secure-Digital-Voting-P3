@@ -1,33 +1,246 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Digital Ballot - Secure Voting Platform</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
 
+    body {
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      background: radial-gradient(circle at top right, #1e293b, #0f172a 60%, #020617);
+      color: #0f172a;
+      padding: 40px 20px;
+    }
+
+    .container {
+      background: #ffffff;
+      width: 100%;
+      max-width: 680px;
+      padding: 40px 32px;
+      border-radius: 20px;
+      box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.4), 0 0 1px 1px rgba(255, 255, 255, 0.1);
+    }
+
+    .header {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: #eff6ff;
+      color: #2563eb;
+      padding: 6px 14px;
+      border-radius: 9999px;
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 16px;
+    }
+
+    .badge svg {
+      width: 14px;
+      height: 14px;
+    }
+
+    .header h1 {
+      font-size: 26px;
+      font-weight: 700;
+      color: #0f172a;
+      margin-bottom: 6px;
+    }
+
+    .header p {
+      font-size: 14px;
+      color: #64748b;
+    }
+
+    /* Party Sections */
+    .party-block {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 14px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+
+    h2 {
+      font-size: 18px;
+      font-weight: 700;
+      color: #1e293b;
+      margin-bottom: 14px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #e2e8f0;
+    }
+
+    /* Option row styling without extra wrappers */
+    .option-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 14px;
+      margin-bottom: 8px;
+      border-radius: 8px;
+      border: 1px solid #e2e8f0;
+      background: #ffffff;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .option-row:hover {
+      border-color: #93c5fd;
+      background: #eff6ff;
+    }
+
+    .option-row.candidate-row {
+      margin-left: 16px;
+      background: #ffffff;
+      border-color: #f1f5f9;
+    }
+
+    .option-row.candidate-row:hover {
+      border-color: #bfdbfe;
+      background: #f8fafc;
+    }
+
+    input[type="radio"] {
+      appearance: none;
+      -webkit-appearance: none;
+      width: 18px;
+      height: 18px;
+      border: 2px solid #cbd5e1;
+      border-radius: 50%;
+      outline: none;
+      margin: 0;
+      cursor: pointer;
+      display: grid;
+      place-content: center;
+      transition: all 0.15s ease;
+      flex-shrink: 0;
+    }
+
+    input[type="radio"]::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      transform: scale(0);
+      transition: 120ms transform ease-in-out;
+      box-shadow: inset 1em 1em #2563eb;
+    }
+
+    input[type="radio"]:checked {
+      border-color: #2563eb;
+    }
+
+    input[type="radio"]:checked::before {
+      transform: scale(1);
+    }
+
+    label {
+      font-size: 15px;
+      font-weight: 500;
+      color: #334155;
+      cursor: pointer;
+      flex: 1;
+    }
+
+    /* Style row when radio inside is checked */
+    .option-row:has(input[type="radio"]:checked) {
+      border-color: #3b82f6;
+      background: #eff6ff;
+    }
+
+    .option-row:has(input[type="radio"]:checked) label {
+      color: #1d4ed8;
+      font-weight: 600;
+    }
+
+    /* Submit Button */
+    button[type="submit"] {
+      width: 100%;
+      background: linear-gradient(135deg, #2563eb, #1d4ed8);
+      color: #ffffff;
+      border: none;
+      padding: 16px 24px;
+      font-size: 16px;
+      font-weight: 600;
+      border-radius: 12px;
+      cursor: pointer;
+      box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
+      transition: all 0.2s ease;
+      margin-top: 12px;
+    }
+
+    button[type="submit"]:hover {
+      background: linear-gradient(135deg, #1d4ed8, #1e40af);
+      transform: translateY(-1px);
+      box-shadow: 0 6px 16px rgba(37, 99, 235, 0.35);
+    }
+
+    button[type="submit"]:active {
+      transform: translateY(0);
+    }
+  </style>
+</head>
 <body>
-<form action="/submit_vote" method="post">
 
-{% for party, members in parties.items() %}
+  <div class="container">
+    <div class="header">
+      <div class="badge">
+        <svg fill="currentColor" viewBox="0 0 20 20">
+          <path fill-rule="evenodd" d="M2.166 4.999A11.954 11.954 0 0010 1.944 11.954 11.954 0 0017.834 5c.11.65.166 1.32.166 2.001 0 5.225-3.34 9.67-8 11.317C5.34 16.67 2 12.225 2 7c0-.682.057-1.35.166-2.001zm11.541 3.708a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+        </svg>
+        Official Digital Ballot
+      </div>
+      <h1>Select Your Vote</h1>
+      <p>Choose one political party or select an individual candidate.</p>
+    </div>
 
-    <h2>{{ party }} ( {{ abbreviations[loop.index0] }} )</h2>
+    <!-- Exact original form and Jinja2 template logic -->
+    <form action="/submit_vote" method="post">
 
-    <input type="radio"
-           name="vote"
-           value="party:{{ party }}">
-    <label>{{ party }} ( {{ abbreviations[loop.index0] }} )</label>
+      {% for party, members in parties.items() %}
+        <div class="party-block">
+          <h2>{{ party }} {{ abbreviations[loop.index0] }}</h2>
 
-    {% for member in members %}
-        <input type="radio"
-               name="vote"
-               value="candidate:{{ member }}">
-        <label>{{ member }}</label>
+          <div class="option-row">
+            <input type="radio"
+                   id="party_{{ loop.index0 }}"
+                   name="vote"
+                   value="party:{{ party }}">
+            <label for="party_{{ loop.index0 }}">{{ party }} {{ abbreviations[loop.index0] }} (Party Vote)</label>
+          </div>
 
-    {% endfor %}
+          {% for member in members %}
+            <div class="option-row candidate-row">
+              <input type="radio"
+                     id="cand_{{ loop.index0 }}_{{ loop.index }}"
+                     name="vote"
+                     value="candidate:{{ member }}">
+              <label for="cand_{{ loop.index0 }}_{{ loop.index }}">{{ member }}</label>
+            </div>
+          {% endfor %}
+        </div>
+      {% endfor %}
 
-{% endfor %}
+      <button type="submit">
+          Submit Vote
+      </button>
 
-<button type="submit">
-    Submit Vote
-</button>
+    </form>
+  </div>
 
-</form>
 </body>
-
 </html>
