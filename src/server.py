@@ -20,10 +20,20 @@ limiter = Limiter(
 
 logging.basicConfig(filename="voting.log",
                     format='%(asctime)s %(levelname)s: %(message)s',
-                    filemode='w')
+                    filemode='a')
 
 logger = logging.getLogger()
 logger.setLevel(logging.DEBUG)
+
+CLOSE_TIME_STRING = "2026-12-13T00:00:00+01:00"
+CLOSE_TIME = datetime.fromisoformat(CLOSE_TIME_STRING)
+
+LOGIN_MESSAGES = {
+    "invalid":  "Wrong CPR number or password.",
+    "expired":  "Your session has expired. Please log in again.",
+    "no_access": "You don't have access to that page. Please log in.",
+    "rate_limited": "Too many attempts. Please wait a minute and try again.",
+}
 
 # ----- Setup ------
 
@@ -85,7 +95,7 @@ def updateToken(result,response):
     
     return response
 
-def register(token,totp):
+def register(token,totp,error=None):
     print(f"Token: {token}")
 
     with sqlite3.connect("voting.db") as conn:
@@ -118,7 +128,8 @@ def register(token,totp):
 
     return render_template(
         "otp.html",
-        onetimepass = totp
+        onetimepass=totp,
+        error=error
     )
 
 def chk_perms(token,level):
@@ -165,21 +176,29 @@ def chk_expiry(token):
         conn.close()
         return False
 
-@app.route("/",methods=['GET'])
-@limiter.limit("10 per minute")
-def main():
+@app.before_request
+def block_after_close():
+    if datetime.now().astimezone() >= CLOSE_TIME:
+        if request.endpoint != "index":
+            return redirect(url_for("index"))
+
+@app.errorhandler(429)
+def ratelimit_handler(e):
+    return redirect("/login?error=rate_limited")
+
+@app.route("/")
+def index():
     return render_template(
-            "index.html",
-            closetime = "2026-11-13T00:00:00"
-            )
+        "index.html",
+        closetime=CLOSE_TIME_STRING
+    )
 
 @app.route("/login",methods=['GET','POST'])
-@limiter.limit("5 per minute")
+@limiter.limit("20 per minute")
 def handle_method_login():
-    if request.method == 'GET': 
-        return render_template(
-        "login.html"
-        )
+    if request.method == 'GET':
+        error = LOGIN_MESSAGES.get(request.args.get("error"))
+        return render_template("login.html", error=error)
 
     elif request.method == 'POST':
         with sqlite3.connect("voting.db") as conn:
@@ -195,7 +214,7 @@ def handle_method_login():
 
             if password_user == None:
                 logging.info("LOGIN_FAIL ip=%s", request.remote_addr)
-                return make_response(redirect("/login"))
+                return make_response(redirect("/login?error=invalid"))
         
             password_user = password_user[0]    
 
@@ -235,15 +254,15 @@ def handle_method_login():
         return {"Status": "Not found", "Error": "404"}
 
 @app.route("/register",methods=['GET','POST'])
-@limiter.limit("5 per minute")
+@limiter.limit("20 per minute")
 def handle_method_register():
     token = request.cookies.get("session_token")
 
-    if(chk_expiry(token) == True):
-        return(make_response(redirect("/login")))
+    if chk_expiry(token):
+        return redirect("/login?error=expired" if token else "/login")
 
     if(not chk_perms(token,0)):
-        return(make_response(redirect("/login")))
+        return(make_response(redirect("/login?error=no_access")))
 
     with sqlite3.connect("voting.db") as conn:
         cursor = conn.cursor()
@@ -256,7 +275,7 @@ def handle_method_register():
     VoterId = cursor.fetchone()
 
     if(not VoterId):
-        return(make_response(redirect("/login")))
+        return(make_response(redirect("/login?error=no_access")))
 
     VoterId = VoterId[0]
 
@@ -271,7 +290,7 @@ def handle_method_register():
         pass
 
     if request.method == 'GET':
-        response = register(token,totp)
+        response = register(token,totp,error=None)
         return(response)
     
     elif request.method == 'POST':
@@ -287,18 +306,20 @@ def handle_method_register():
             return(updateToken(VoterId,make_response(redirect("/voting"))))
         else:
             conn.close()
-            return{"Error": "Wrong OTP"}
+            response = register(token,totp,error="Incorrect code. Please try again with the current code from your app.")
+            return(response)
     else:
         conn.close()
-        return {"Status": "Not found", "Error": "404"}
+        response = register(token,totp,error="Incorrect code. Please try again with the current code from your app.")
+        return(response)
 
 @app.route("/two_fac",methods=['GET','POST'])
-@limiter.limit("5 per minute")
+@limiter.limit("20 per minute")
 def handle_method_twofac():
     token = request.cookies.get("session_token")
 
     if(chk_expiry(token) == True):
-        return(make_response(redirect("/login")))
+        return(make_response(redirect("/login?error=expired")))
 
     if(not chk_perms(token,0)):
         return(make_response(redirect("/register")))
@@ -311,7 +332,7 @@ def handle_method_twofac():
     voterID = cursor.fetchone()
 
     if(not voterID):
-        return(make_response(redirect("/login")))
+        return(make_response(redirect("/login?error=no_access")))
 
     voterID = voterID[0]
     
@@ -325,9 +346,11 @@ def handle_method_twofac():
         otp = request.form["OTP"]
 
         cursor.execute("""SELECT OTP From Voters_view WHERE((Voter_id = ?) AND (Has_voted = 0))""",(voterID,))
-        totp = cursor.fetchone()
-        totp = totp[0]
+        totp = cursor.fetchone()[0]
 
+        if(not totp):
+            return(make_response(redirect("/register")))
+        
         logging.info("%s",pyotp.TOTP(totp).now())
 
         if(pyotp.TOTP(totp).verify(otp)):
@@ -338,32 +361,22 @@ def handle_method_twofac():
             response = make_response(redirect("/voting"))
 
             return(updateToken(voterID,response))
-        
+
         else:
             return render_template(
-            "twofac.html"
-        )
-            
+                "twofac.html",
+                error="Incorrect code. Codes change every 30 seconds, so make sure you use the current one."
+            )
     else:
         return {"Status": "Not found", "Error": "404"}
     
 @app.get("/voting")
-@limiter.limit("3 per minute")
+@limiter.limit("6 per minute")
 def get_voting_sheet():
     token = request.cookies.get("session_token")
 
-    if(token == None):
-        return(make_response(redirect("/login")))
-
-    if(chk_expiry(token) == True):
-        return(make_response(redirect("/login")))
-    
-    if(not chk_perms(token,1)):
-        return(make_response(redirect("/login")))
-
-    parties,abbreviations = getCandidates()
-
-    print(abbreviations)
+    if(token == None or chk_expiry(token) == True or not chk_perms(token,1)):
+        return(make_response(redirect("/login?error=expired")))
 
     return render_template(
         "voting.html",
@@ -372,7 +385,7 @@ def get_voting_sheet():
         )
 
 @app.post("/submit_vote")
-@limiter.limit("2 per minute")
+@limiter.limit("4 per minute")
 def submit_vote():
     with sqlite3.connect("voting.db") as conn:
         cursor = conn.cursor() 
@@ -380,39 +393,16 @@ def submit_vote():
     token = request.cookies.get("session_token")
 
     if(chk_expiry(token) == True):
-        return(make_response(redirect("/login")))
+        return(make_response(redirect("/login?error=expired")))
 
     if(not chk_perms(token,1)):
-        return(make_response(redirect("/login")))   
+        return(make_response(redirect("/login?error=no_access")))   
 
     vote = request.form.get("vote")
 
     vote_type, vote_value = vote.split(":", 1)
 
-    if vote_type == "candidate":
-        cursor.execute("""SELECT Candidate_id FROM Candidates WHERE Candidate_name = ?""", (vote_value,))
-        candidate = cursor.fetchone()
-        vote = candidate[0] # for at sikre os det er en kandidat
-        
-        cursor.execute(
-        "INSERT INTO votes (candidate_id,party_id,timestamp) VALUES (?,(SELECT party_id FROM Candidates WHERE Candidate_id = ?),(strftime('%Y-%m-%d %H:%M:%f', 'now')))",
-        (vote,vote,)
-        ) 
-
-    elif vote_type == "party":
-        print(vote_value)
-        cursor.execute("""SELECT party_id FROM Parties WHERE Party_name = ?""", (vote_value,))
-        party = cursor.fetchone()
-        vote = party[0] # for at sikre os det er en kandidat
-        
-        cursor.execute(
-        "INSERT INTO votes (candidate_id,party_id,timestamp) VALUES (?,(SELECT party_id FROM Candidates WHERE Candidate_id = ?),(strftime('%Y-%m-%d %H:%M:%f', 'now')))",
-        (None,vote,)
-        ) 
-    
-    else:
-        logging.warning("VOTE_REJECTED voter_id=%s", ID)
-        return{"status": "error"}    
+    cursor.execute("""BEGIN TRANSACTION""")
 
     try:
         cursor.execute("""UPDATE Voters SET has_voted = 1 WHERE Voter_Id = (SELECT Voter_id from Sessions WHERE session_token = ?);""", (token,))
@@ -424,22 +414,52 @@ def submit_vote():
         cursor.execute("""SELECT COUNT(VoteID) FROM Votes""")
         vote_count = cursor.fetchone()
 
-        if(vote_count[0] > COUNT):
+        if(vote_count[0]+1 > COUNT):
             logging.warning("VOTES EXCEEDED LIMIT: %s", vote_count[0])
 
-        conn.commit()
+
+        if vote_type == "candidate":
+            cursor.execute("""SELECT Candidate_id FROM Candidates WHERE Candidate_name = ?""", (vote_value,))
+            candidate = cursor.fetchone()
+            vote = candidate[0] # for at sikre os det er en kandidat
+            
+            cursor.execute(
+            "INSERT INTO votes (candidate_id,party_id,timestamp) VALUES (?,(SELECT party_id FROM Candidates WHERE Candidate_id = ?),(strftime('%Y-%m-%d %H:%M:%f', 'now')))",
+            (vote,vote,)
+            ) 
+
+        elif vote_type == "party":
+            print(vote_value)
+            cursor.execute("""SELECT party_id FROM Parties WHERE Party_name = ?""", (vote_value,))
+            party = cursor.fetchone()
+            vote = party[0] # for at sikre os det er en kandidat
+            
+            cursor.execute(
+            "INSERT INTO votes (candidate_id,party_id,timestamp) VALUES (?,(SELECT party_id FROM Candidates WHERE Candidate_id = ?),(strftime('%Y-%m-%d %H:%M:%f', 'now')))",
+            (None,vote,)
+            ) 
+
+        else:
+            cursor.execute("""ROLLBACK""")
+            logging.warning("VOTE_REJECTED voter_id=%s", ID)
+            return {"status": "error"}     
+
+        cursor.execute("""COMMIT""")
+
+        response = render_template(
+        "confirmation.html"
+         )
+
+    except:
+        cursor.execute("""ROLLBACK""")
+        logging.warning("VOTE_FAILED ip=%s", get_remote_address)
+        response = {"status": "error"} 
+
+    finally:
         conn.close()
 
-        logging.info("VOTE_ACCEPTED voter_id=%s", ID)
-
-        return render_template(
-        "confirmation.html",
-            vote = vote
-            )
-    except:
-        logging.critical("VOTER NOT MARKED voter_id=%s ip=%s", ID, request.remote_addr)
-        return{"status": "error"}
-       
+    return response
+  
 @app.get("/reciept")
 @limiter.limit("10 per minute")
 def confirmation():
@@ -456,12 +476,10 @@ COUNT = cursor.fetchone()[0]
 conn.commit()
 conn.close()
 
+parties,abbreviations = getCandidates()
+
 app.run(
-    host="0.0.0.0",
+    host="127.0.0.1",
     port=443,
     ssl_context=("cert.pem", "key.pem"),
-    debug=True
 )
-
-conn.commit()
-conn.close()
